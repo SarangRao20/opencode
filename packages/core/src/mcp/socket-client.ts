@@ -1,7 +1,7 @@
 export * as McpSocketClient from "./socket-client.js"
 
 import { deserializeMessage, type JSONRPCMessage, type Transport } from "@modelcontextprotocol/client"
-import { Effect } from "effect"
+import { Effect, Result } from "effect"
 
 /** The side of an incoming WebSocket the transport writes to. */
 export interface Socket {
@@ -25,9 +25,10 @@ export interface SocketTransport extends Transport {
  * not valid JSON or not a JSON-RPC message is reported through `onerror` and the connection stays
  * open. Frames that arrive before `start()` are buffered and delivered on start.
  *
- * Closing: `close()` closes the socket with 1000 (normal). The endpoint closes with 1011 on internal
- * errors and 1008 on policy or auth failures. Either way `onclose` fires exactly once, and nothing
- * is replayed after a disconnect: a reconnecting client starts a fresh MCP session.
+ * Closing: `close()` closes the socket with 1000 (normal). The transport learns that the socket
+ * closed for any other reason through `ended()`; which close codes the endpoint uses is its own
+ * concern. Either way `onclose` fires exactly once, and nothing is replayed after a disconnect: a
+ * reconnecting client starts a fresh MCP session.
  */
 export function make(socket: Socket): SocketTransport {
   const pending: string[] = []
@@ -40,40 +41,35 @@ export function make(socket: Socket): SocketTransport {
     transport.onclose?.()
   }
 
-  const receive = (text: string) =>
-    Effect.runSync(
+  const receive = (text: string) => {
+    const parsed = Effect.runSync(
       Effect.try({
         try: () => deserializeMessage(text),
         catch: (cause) => new Error("Invalid MCP socket frame", { cause }),
-      }).pipe(
-        Effect.match({
-          onFailure: (error) => transport.onerror?.(error),
-          onSuccess: (message) => transport.onmessage?.(message),
-        }),
-      ),
+      }).pipe(Effect.result),
     )
+    if (Result.isFailure(parsed)) return transport.onerror?.(parsed.failure)
+    transport.onmessage?.(parsed.success)
+  }
 
   const transport: SocketTransport = {
     start: () => {
       if (phase === "closed") return Promise.reject(new Error("Not connected"))
       if (phase === "open") return Promise.reject(new Error("Socket transport already started"))
       phase = "open"
-      pending.splice(0).forEach(receive)
+      while (phase === "open" && pending.length > 0) receive(pending.shift()!)
       return Promise.resolve()
     },
     send: (message: JSONRPCMessage) =>
       phase !== "open"
         ? Promise.reject(new Error("Not connected"))
-        : Effect.runPromise(
-            Effect.try({
-              try: () => socket.send(JSON.stringify(message)),
-              catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-            }),
-          ),
+        : Promise.try(() => socket.send(JSON.stringify(message))),
     close: () => {
       if (phase === "closed") return Promise.resolve()
-      finish()
+      phase = "closed"
+      pending.length = 0
       socket.close(1000)
+      transport.onclose?.()
       return Promise.resolve()
     },
     deliver: (text) => {

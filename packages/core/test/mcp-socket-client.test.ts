@@ -100,6 +100,45 @@ describe("McpSocketClient", () => {
     await expect(transport.send(ping)).rejects.toThrow("Not connected")
   })
 
+  test("fires onclose when the socket ends before start, then rejects start", async () => {
+    const transport = McpSocketClient.make(fakeSocket())
+    const seen = observe(transport)
+    transport.deliver(JSON.stringify(ping))
+    transport.ended()
+    expect(seen.closes).toBe(1)
+    await expect(transport.start()).rejects.toThrow("Not connected")
+    expect(seen.messages).toEqual([])
+  })
+
+  test("rejects a second start", async () => {
+    const transport = McpSocketClient.make(fakeSocket())
+    observe(transport)
+    await transport.start()
+    await expect(transport.start()).rejects.toThrow("already started")
+  })
+
+  test("rejects send before start", async () => {
+    const socket = fakeSocket()
+    const transport = McpSocketClient.make(socket)
+    observe(transport)
+    await expect(transport.send(ping)).rejects.toThrow("Not connected")
+    expect(socket.sent).toEqual([])
+  })
+
+  test("stops flushing buffered frames once closed", async () => {
+    const transport = McpSocketClient.make(fakeSocket())
+    const seen = observe(transport)
+    transport.onmessage = (message) => {
+      seen.messages.push(message)
+      transport.ended()
+    }
+    transport.deliver(JSON.stringify(ping))
+    transport.deliver(JSON.stringify(ping))
+    await transport.start()
+    expect(seen.messages).toEqual([ping])
+    expect(seen.closes).toBe(1)
+  })
+
   test("carries an MCP session between the SDK client and server", async () => {
     // Two transports wired back to back stand in for the two ends of one WebSocket.
     const ends: { client?: McpSocketClient.SocketTransport; server?: McpSocketClient.SocketTransport } = {}
@@ -125,8 +164,8 @@ describe("McpSocketClient", () => {
     )
     const client = new Client({ name: "opencode", version: "1.0.0" })
     const closed = Promise.withResolvers<void>()
-    await Promise.all([server.connect(ends.server), client.connect(ends.client)])
     server.server.onclose = () => closed.resolve()
+    await Promise.all([server.connect(ends.server), client.connect(ends.client)])
 
     const listed = await client.listTools()
     expect(listed.tools.map((tool) => tool.name)).toEqual(["echo"])
