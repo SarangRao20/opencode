@@ -9,6 +9,7 @@ const schema = resolve(import.meta.dir, "../../schema")
 const protocol = resolve(import.meta.dir, "../../protocol")
 const core = resolve(import.meta.dir, "../../core")
 const server = resolve(import.meta.dir, "../../server")
+const mcpSdk = realpathSync(resolve(import.meta.dir, "../node_modules/@modelcontextprotocol/server"))
 
 describe("public import boundaries", () => {
   test("isolates each public entrypoint", async () => {
@@ -19,6 +20,7 @@ describe("public import boundaries", () => {
     expect(within(root.all, protocol)).toEqual([])
     expect(within(root.all, core)).toEqual([])
     expect(within(root.all, server)).toEqual([])
+    expect(within(root.all, mcpSdk)).toEqual([])
 
     const network = await bundleInputs("@opencode/client/effect", "browser")
 
@@ -41,6 +43,15 @@ describe("public import boundaries", () => {
     expect(within(effectService.eager, effect).length).toBeGreaterThan(0)
     expect(within(effectService.all, core)).toEqual([])
     expect(within(effectService.all, server)).toEqual([])
+
+    const mcp = await bundleInputs("@opencode/client/mcp", "browser")
+
+    expect(within(mcp.eager, mcpSdk).length).toBeGreaterThan(0)
+    expect(within(mcp.all, effect)).toEqual([])
+    expect(within(mcp.all, schema)).toEqual([])
+    expect(within(mcp.all, protocol)).toEqual([])
+    expect(within(mcp.all, core)).toEqual([])
+    expect(within(mcp.all, server)).toEqual([])
   })
 })
 

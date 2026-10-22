@@ -1,6 +1,6 @@
 import {
+  deserializeMessage,
   McpServer,
-  parseJSONRPCMessage,
   type JSONRPCMessage,
   type ServerContext,
   type Transport,
@@ -48,11 +48,11 @@ export function connectClientMcp(options: ClientMcpOptions): ClientMcpConnection
     const server = new McpServer({ name: options.name, version: "1.0.0" })
     state.server = server
     options.register(server)
-    server.connect(
-      createTransport(socket, () => {
-        state.delay = RECONNECT_MIN
-      }),
-    )
+    // Reset backoff only once the opencode server finished initializing, so a failed attach keeps backing off.
+    server.server.oninitialized = () => {
+      state.delay = RECONNECT_MIN
+    }
+    void server.connect(createTransport(socket)).catch(() => socket.close())
     socket.addEventListener("close", () => {
       if (state.server === server) state.server = undefined
       if (state.disposed) return
@@ -85,7 +85,7 @@ function endpoint(options: ClientMcpOptions) {
   url.search = base.search
   if (options.directory) url.searchParams.set("location[directory]", options.directory)
   url.searchParams.set("name", options.name)
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
+  url.protocol = url.protocol === "https:" || url.protocol === "wss:" ? "wss:" : "ws:"
   return url
 }
 
@@ -93,17 +93,17 @@ function endpoint(options: ClientMcpOptions) {
  * One JSON-RPC message per text frame. Frames that arrive before `start()` are buffered. Invalid frames are
  * reported through `onerror` and the connection stays open. Nothing is replayed after a disconnect.
  */
-function createTransport(socket: WebSocket, onActive: () => void) {
+function createTransport(socket: WebSocket) {
   const state: { started: boolean; closed: boolean; buffer: string[] } = { started: false, closed: false, buffer: [] }
 
   const end = () => {
     if (state.closed) return
     state.closed = true
+    state.buffer.length = 0
     transport.onclose?.()
   }
 
   const receive = (text: string) => {
-    onActive()
     const message = parse(text)
     if (message instanceof Error) return transport.onerror?.(message)
     transport.onmessage?.(message)
@@ -112,19 +112,21 @@ function createTransport(socket: WebSocket, onActive: () => void) {
   const transport: Transport = {
     async start() {
       state.started = true
-      state.buffer.splice(0).forEach(receive)
+      while (!state.closed && state.buffer.length > 0) receive(state.buffer.shift()!)
     },
     async send(message: JSONRPCMessage) {
       if (state.closed || socket.readyState !== socket.OPEN) throw new Error("Not connected")
       socket.send(JSON.stringify(message))
     },
     async close() {
+      if (state.closed) return
       socket.close(1000)
       end()
     },
   }
 
   socket.addEventListener("message", (event) => {
+    if (state.closed) return
     if (typeof event.data !== "string") return transport.onerror?.(new Error("Expected a text frame"))
     if (!state.started) return void state.buffer.push(event.data)
     receive(event.data)
@@ -135,7 +137,7 @@ function createTransport(socket: WebSocket, onActive: () => void) {
 
 function parse(text: string) {
   try {
-    return parseJSONRPCMessage(JSON.parse(text))
+    return deserializeMessage(text)
   } catch (cause) {
     return new Error("Invalid JSON-RPC frame", { cause })
   }

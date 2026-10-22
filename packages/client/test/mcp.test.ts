@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, jest, test } from "bun:test"
 import { Client, type JSONRPCMessage, type Transport } from "@modelcontextprotocol/client"
 import type { ServerWebSocket } from "bun"
 import { connectClientMcp, sessionID } from "../src/mcp"
@@ -10,8 +10,9 @@ type Peer = {
   readonly closed: Promise<void>
 }
 
-const servers: Array<ReturnType<typeof serve>> = []
+const servers: Array<{ stop(force: boolean): Promise<void> }> = []
 afterEach(async () => {
+  jest.useRealTimers()
   await Promise.all(servers.splice(0).map((server) => server.stop(true)))
 })
 
@@ -74,17 +75,86 @@ describe("connectClientMcp", () => {
     await connection.close()
   })
 
-  test("close stops reconnecting", async () => {
+  test("close cancels a pending reconnect", async () => {
     const server = serve()
-    const connection = connectClientMcp({ url: server.url, name: "tui", register() {} })
+    const socket = trackedSocket()
+    const connection = connectClientMcp({ url: server.url, name: "tui", register() {}, WebSocket: socket.WebSocket })
     const peer = await server.next()
 
+    jest.useFakeTimers()
     peer.socket.close(1011, "internal")
+    await socket.closed(1)
     await connection.close()
-    await Bun.sleep(1_000)
-    expect(server.connections()).toBe(1)
+    jest.advanceTimersByTime(10_000)
+    expect(socket.opened()).toBe(1)
+  })
+
+  test("keeps backing off while the opencode server never initializes", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request, server) {
+        if (server.upgrade(request)) return
+        return new Response("upgrade required", { status: 426 })
+      },
+      websocket: {
+        open(socket) {
+          socket.send("not json")
+          socket.close(1011, "internal")
+        },
+        message() {},
+      },
+    })
+    servers.push(server)
+    const socket = trackedSocket()
+    jest.useFakeTimers()
+    const connection = connectClientMcp({
+      url: server.url.href,
+      name: "tui",
+      register() {},
+      WebSocket: socket.WebSocket,
+    })
+
+    await socket.closed(1)
+    jest.advanceTimersByTime(500)
+    expect(socket.opened()).toBe(2)
+    await socket.closed(2)
+    jest.advanceTimersByTime(999)
+    expect(socket.opened()).toBe(2)
+    jest.advanceTimersByTime(1)
+    expect(socket.opened()).toBe(3)
+
+    await connection.close()
   })
 })
+
+/** Counts sockets synchronously at construction, so fake-timer reconnects are observable without real waits. */
+function trackedSocket() {
+  const state = { opened: 0, closed: 0, waiting: [] as Array<{ count: number; resolve: () => void }> }
+  class Tracked extends WebSocket {
+    constructor(url: string | URL, init?: string | string[]) {
+      super(url, init)
+      state.opened++
+      this.addEventListener("close", () => {
+        state.closed++
+        state.waiting = state.waiting.filter((waiter) => {
+          if (state.closed < waiter.count) return true
+          // Let connectClientMcp's own close listener run before the test continues.
+          setImmediate(waiter.resolve)
+          return false
+        })
+      })
+    }
+  }
+  return {
+    WebSocket: Tracked,
+    opened: () => state.opened,
+    closed: (count: number) =>
+      new Promise<void>((resolve) => {
+        if (state.closed >= count) return resolve()
+        state.waiting.push({ count, resolve })
+      }),
+  }
+}
 
 function serve() {
   const waiting: Array<(peer: Peer) => void> = []
@@ -122,7 +192,6 @@ function serve() {
   })
   const result = {
     url: server.url.href,
-    connections: () => state.connections,
     next: () =>
       new Promise<Peer>((resolve) => {
         const peer = ready.shift()
