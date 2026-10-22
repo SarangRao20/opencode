@@ -18,6 +18,9 @@ export const { use: useSessionTerminals, provider: SessionTerminalsProvider } = 
     const event = useEvent()
     const [available, setAvailable] = createSignal(false)
     const [focus, setFocus] = createSignal<string>()
+    // Settles once the latest terminal support check finishes; pending until the first connection.
+    const initial = Promise.withResolvers<void>()
+    let check = initial.promise
     const storage = useStorage()
     const [store, update] = storage.store<SessionTerminalsState>("session-terminal-selection", {
       initial: { sessions: {} },
@@ -41,7 +44,7 @@ export const { use: useSessionTerminals, provider: SessionTerminalsProvider } = 
     // `focus: false` shows the terminal without moving keyboard focus into it, for terminals the user didn't open.
     const selectTerminal = async (sessionID: string, ptyID: string | null, options?: { focus?: boolean }) => {
       if (ptyID !== null && !terminals[sessionID]?.some((terminal) => terminal.id === ptyID)) return
-      if (options?.focus !== false) setFocus(ptyID ?? undefined)
+      setFocus(options?.focus === false ? undefined : (ptyID ?? undefined))
       await update((draft) => {
         draft.sessions[sessionID] = ptyID
       })
@@ -60,7 +63,7 @@ export const { use: useSessionTerminals, provider: SessionTerminalsProvider } = 
     // The event stream opens with server.connected, so this runs for the first connection and every reconnect.
     onCleanup(
       event.on("server.connected", () => {
-        void client.api.server
+        check = client.api.server
           .info()
           .then((info) => {
             // Servers that predate the field omit it; keep offering terminals as clients did before.
@@ -76,11 +79,15 @@ export const { use: useSessionTerminals, provider: SessionTerminalsProvider } = 
             setAvailable(false)
             console.error("Failed to read server terminal support", error)
           })
+          .finally(initial.resolve)
       }),
     )
 
     return {
       available,
+      async checked() {
+        await check
+      },
       get(sessionID: string) {
         return {
           terminals: terminals[sessionID] ?? [],

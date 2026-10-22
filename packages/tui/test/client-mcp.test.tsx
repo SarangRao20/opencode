@@ -61,8 +61,6 @@ test.skipIf(process.platform === "win32")("open_terminal opens an unfocused term
   })
   peer.socket.send(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }))
   await tui.setup.waitForFrame((frame) => frame.includes("Client MCP message"))
-  await tui.setup.waitFor(() => tui.requests.includes("/api/info"))
-  await tui.setup.waitForVisualIdle()
   // Mount and server.connected must not open a second connection.
   expect(tui.upgrades).toBe(1)
 
@@ -176,10 +174,13 @@ async function start(enabled: boolean) {
       return counter.upgrades
     },
     async [Symbol.asyncDispose]() {
-      setup.renderer.destroy()
-      await task
-      await server.stop(true)
-      await state[Symbol.asyncDispose]()
+      try {
+        setup.renderer.destroy()
+        await task
+      } finally {
+        await server.stop(true)
+        await state[Symbol.asyncDispose]()
+      }
     },
   }
 }

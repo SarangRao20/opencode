@@ -3,6 +3,7 @@ import { createEffect, onCleanup, untrack } from "solid-js"
 import { useClientMcpExperiment } from "../config"
 import { useClient } from "./client"
 import { useData } from "./data"
+import { useLocation } from "./location"
 import { useRoute } from "./route"
 import { useSessionTabs } from "./session-tabs"
 import { useSessionTerminals } from "./session-terminals"
@@ -12,6 +13,7 @@ export function ClientMcp() {
   const client = useClient()
   const enabled = useClientMcpExperiment()
   const data = useData()
+  const location = useLocation()
   const route = useRoute()
   const tabs = useSessionTabs()
   const terminals = useSessionTerminals()
@@ -21,6 +23,7 @@ export function ClientMcp() {
     if (!calledBy) return failure("Unknown session")
     if (!data.session.get(calledBy)) await data.session.sync(calledBy).catch(() => undefined)
     if (!data.session.get(calledBy)) return failure("Unknown session")
+    await terminals.checked()
     if (!terminals.available()) return failure("This server does not support terminals")
     const root = data.session.root(calledBy)
     const routed = route.data.type === "session" ? route.data.sessionID : undefined
@@ -32,18 +35,22 @@ export function ClientMcp() {
           ? root
           : undefined
     if (!target) return failure("session not open in this TUI")
+    if (!data.session.get(target)) await data.session.sync(target).catch(() => undefined)
     await terminals.refresh(target)
     // The agent opened it, so don't move the user's keyboard focus into a live shell.
-    const last = terminals.get(target).terminals.at(-1)
-    if (last) await terminals.selectTerminal(target, last.id, { focus: false })
-    const ptyID = last?.id ?? (await terminals.newTerminal(target, { focus: false })).id
+    const current = terminals.get(target)
+    const existing = current.selectedTerminalID ?? current.terminals.at(-1)?.id
+    if (existing && existing !== current.selectedTerminalID)
+      await terminals.selectTerminal(target, existing, { focus: false })
+    const ptyID = existing ?? (await terminals.newTerminal(target, { focus: false })).id
     return { content: [{ type: "text" as const, text: `Opened terminal ${ptyID}` }] }
   }
 
-  // Reconnects when the flag flips or the server endpoint changes after a service reconnect.
+  // Reconnects when the flag flips, the viewed location changes, or the server endpoint changes after a service reconnect.
+  // Server MCP is Location-scoped, so only sessions in the viewed location's directory see the tool.
   const sync = () => {
     const url = client.url
-    const directory = data.location.default().directory
+    const directory = location.ref?.directory ?? data.location.default().directory
     const key = enabled() && url ? JSON.stringify([url, client.headers, directory]) : undefined
     if (key === state.key) return
     void state.connection?.close()
@@ -61,7 +68,7 @@ export function ClientMcp() {
                   "open_terminal",
                   {
                     description:
-                      "Open a terminal for the current session in the user's TUI, without taking keyboard focus. The pane may stay hidden if the user has a panel or the sidebar open.",
+                      "Open a terminal for the current session in the user's TUI, without taking keyboard focus.",
                   },
                   (ctx) => openTerminal(sessionID(ctx)),
                 )
