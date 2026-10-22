@@ -227,31 +227,35 @@ function measureAnchors(box: HTMLElement, anchor: Hold["anchor"]): () => Shift[]
   }
 }
 
-// The box's blocks in view, breadth first up to a bound, so a column that moves against its parent, like centred
-// content, keeps its start edge. Inline boxes rewrap rather than move, and a block that also moves down has wrapped onto
-// another line; both are left to the layout, as is a block that already has its own translate.
+// The box's blocks in view, breadth first, so a column that moves against its parent, like centred content, keeps its
+// start edge. Inline boxes rewrap rather than move, and a block that also moves down has wrapped onto another line; both
+// are left to the layout, as is a block that already has its own translate. Every element read counts toward the bound,
+// in view or not, so a long document or tree costs no more than a short one; a subtree out of view is skipped whole.
 function measureBlocks(box: HTMLElement) {
   const bounds = box.getBoundingClientRect()
   const rtl = box.matches(":dir(rtl)")
   const start = (rect: DOMRect) => (rtl ? rect.right : rect.left)
   const blocks = [{ element: box, parent: -1, x: start(bounds), y: bounds.top }]
+  let visits = 0
 
-  const visit = (element: Element, parent: number) =>
-    [...element.children].forEach((child) => {
-      if (!(child instanceof HTMLElement) || blocks.length >= 400) return
-      const display = getComputedStyle(child).display
+  const visit = (element: Element, parent: number) => {
+    for (let child = element.firstElementChild; child && visits < 400; child = child.nextElementSibling) {
+      visits++
 
-      // A `display: contents` wrapper has no box of its own; its children lay out in its parent's.
-      if (display === "contents") return visit(child, parent)
-
-      if (display.startsWith("inline")) return
+      if (!(child instanceof HTMLElement)) continue
       const rect = child.getBoundingClientRect()
 
-      if (rect.width === 0 || rect.bottom <= bounds.top || rect.top >= bounds.bottom) return
-      blocks.push({ element: child, parent, x: start(rect), y: rect.top })
-    })
+      // A `display: contents` wrapper has no box of its own; its children lay out in its parent's.
+      if (rect.width === 0 && rect.height === 0 && getComputedStyle(child).display === "contents") visit(child, parent)
 
-  for (let index = 0; index < blocks.length && blocks.length < 400; index++) visit(blocks[index]!.element, index)
+      if (rect.width === 0 || rect.bottom <= bounds.top || rect.top >= bounds.bottom) continue
+
+      if (getComputedStyle(child).display.startsWith("inline")) continue
+      blocks.push({ element: child, parent, x: start(rect), y: rect.top })
+    }
+  }
+
+  for (let index = 0; index < blocks.length && visits < 400; index++) visit(blocks[index]!.element, index)
 
   return () => {
     const moved = blocks.map((block) => {

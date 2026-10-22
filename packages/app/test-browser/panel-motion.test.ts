@@ -278,6 +278,13 @@ it("keeps a held box's centred column at its start edge for the flight, leaving 
   box.getBoundingClientRect = () => new DOMRect(0, 0, 1000 - painted.width, 100)
   tabs.getBoundingClientRect = () => new DOMRect(0, 0, width(), 10)
   column.getBoundingClientRect = () => new DOMRect((width() - 400) / 2, 10, 400, 90)
+  // A long document: its rows run far below the box, and reading them all would stall the flight's first frame.
+  const reads = { rows: 0 }
+  Array.from({ length: 2000 }, (_, index) => {
+    const row = document.createElement("div")
+    row.getBoundingClientRect = () => (reads.rows++, new DOMRect(0, 100 + index * 20, 400, 20))
+    column.append(row)
+  })
   createRoot((dispose) => {
     cleanups.push(dispose)
     holdLandingWidth(() => box, "blocks")
@@ -285,6 +292,7 @@ it("keeps a held box's centred column at its start edge for the flight, leaving 
   })
 
   setOpen(true)
+  expect(reads.rows).toBeLessThan(500)
   expect(box.style.getPropertyValue("--panel-hold-width")).toBe("700px")
   // Centred in 700px rather than 1000px, the column would start 150px further left.
   expect(column.style.translate).toBe("150px")
