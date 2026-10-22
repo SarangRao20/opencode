@@ -165,8 +165,9 @@ function SessionScreenContent(props: {
   let sideContent: HTMLDivElement | undefined
   let sideGlyph: SVGPathElement | undefined
   let sideClosed = 0
-  // While the left sidebar moves the side panel's edge, its contents keep the width they land at.
-  holdLandingWidth(() => sideContent)
+  // While the left sidebar moves the side panel's edge, its contents keep the width they land at, and centred content,
+  // like a Markdown preview, keeps its place rather than jumping by half the change.
+  holdLandingWidth(() => sideContent, "blocks")
   // The toggle's pane fills from the panel's edge as far as the panel is open.
   const paintSideGlyph = () => sideGlyph?.setAttribute("transform", reviewGlyphFill(1 - sideClosed))
 

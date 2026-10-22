@@ -259,6 +259,49 @@ it("holds content beside the panel at its landing width for the flight, its anch
   expect(box.style.translate).toBe("")
 })
 
+it("keeps a held box's centred column at its start edge for the flight, leaving start-pinned blocks put", () => {
+  const box = document.createElement("div")
+  const tabs = document.createElement("div")
+  const column = document.createElement("div")
+  // Like the side region's tab content, the column sits in a `display: contents` wrapper, which has no box.
+  const wrapper = document.createElement("div")
+  wrapper.style.display = "contents"
+  wrapper.append(column)
+  box.append(tabs, wrapper)
+  document.body.append(box)
+  cleanups.push(() => box.remove())
+  const [open, setOpen] = createSignal(false)
+  const painted = { width: 0 }
+  // The box takes what the panel leaves of 1000px. Its tab bar fills it from the start; its 400px column is centred
+  // in the box's held width once it has one. happy-dom has no layout.
+  const width = () => parseFloat(box.style.getPropertyValue("--panel-hold-width")) || 1000 - painted.width
+  box.getBoundingClientRect = () => new DOMRect(0, 0, 1000 - painted.width, 100)
+  tabs.getBoundingClientRect = () => new DOMRect(0, 0, width(), 10)
+  column.getBoundingClientRect = () => new DOMRect((width() - 400) / 2, 10, 400, 90)
+  createRoot((dispose) => {
+    cleanups.push(dispose)
+    holdLandingWidth(() => box, "blocks")
+    createPanelMotion({ open, paint: (shut) => (painted.width = 300 * (1 - shut)) })
+  })
+
+  setOpen(true)
+  expect(box.style.getPropertyValue("--panel-hold-width")).toBe("700px")
+  // Centred in 700px rather than 1000px, the column would start 150px further left.
+  expect(column.style.translate).toBe("150px")
+  expect(tabs.style.translate).toBeFalsy()
+  expect(box.style.translate).toBeFalsy()
+  const shifts: number[] = []
+
+  for (let i = 0; i < 6; i++) {
+    frame()
+    shifts.push(parseFloat(column.style.translate))
+  }
+
+  expect(shifts.every((shift, index) => shift < (shifts[index - 1] ?? 150) && shift > 0)).toBe(true)
+  settle()
+  expect(column.style.translate).toBe("")
+})
+
 it("fades an opening panel in without travel under reduced motion", async () => {
   document.documentElement.dataset.motion = "reduce"
   cleanups.push(() => delete document.documentElement.dataset.motion)

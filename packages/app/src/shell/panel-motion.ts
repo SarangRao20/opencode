@@ -127,7 +127,9 @@ const faded = 0.15
 /** Where a neighbour's content sits: centred content follows its box's centre, start-pinned content its start edge. */
 export type Anchor = "center" | "start"
 
-type Hold = { box: () => HTMLElement | null | undefined; anchor?: () => HTMLElement | null | undefined }
+type Hold = { box: () => HTMLElement | null | undefined; anchor?: (() => HTMLElement | null | undefined) | "blocks" }
+
+type Shift = { element: HTMLElement; shift: number }
 
 type Landing = {
   /** Paints where the flight lands, then back where it is. */
@@ -145,7 +147,9 @@ const landings = new Set<Landing>()
 
 let driver: Landing | undefined
 
-let held: { box: HTMLElement; shift: number }[] = []
+let held: HTMLElement[] = []
+
+let shifted: Shift[] = []
 
 /**
  * Keeps a content box beside the panels at the width it will have once every spring flight lands, so its text wraps
@@ -154,7 +158,8 @@ let held: { box: HTMLElement; shift: number }[] = []
  * contents of a closing panel, is left to its own layout.
  *
  * `anchor` is an element inside the box whose start edge must not jump when the box takes its landing width: the box
- * shifts by the difference, with a transform, and the shift runs out over the flight.
+ * shifts by the difference, with a transform, and the shift runs out over the flight. `"blocks"` does the same for each
+ * block in view that would move against its parent, like a centred column, while start-pinned content stays put.
  */
 export function holdLandingWidth(box: Hold["box"], anchor?: Hold["anchor"]) {
   const hold = { box, anchor }
@@ -172,17 +177,15 @@ function rehold(next: Landing | undefined) {
         const box = hold.box()
 
         if (!box?.isConnected) return []
-        const anchor = hold.anchor?.()
 
-        return [{ box, anchor, before: anchor ? anchorX(anchor, "start") : undefined }]
+        return [{ box, shifts: measureAnchors(box, hold.anchor) }]
       })
     : []
 
-  held.forEach((item) => {
-    item.box.style.removeProperty("--panel-hold-width")
-    item.box.style.translate = ""
-  })
+  held.forEach((box) => box.style.removeProperty("--panel-hold-width"))
+  shifted.forEach((item) => (item.element.style.translate = ""))
   held = []
+  shifted = []
   driver = next
   driver?.begin()
 
@@ -190,25 +193,83 @@ function rehold(next: Landing | undefined) {
   flights.forEach((flight) => flight.land())
   const widths = boxes.map((item) => item.box.getBoundingClientRect().width)
   flights.forEach((flight) => flight.resume())
-  held = boxes
-    .filter((item, index) => {
-      if (widths[index] === 0) return false
-      item.box.style.setProperty("--panel-hold-width", `${widths[index]}px`)
 
-      return true
-    })
-    .map((item) => ({
-      box: item.box,
-      shift: item.anchor && item.before !== undefined ? item.before - anchorX(item.anchor, "start") : 0,
-    }))
+  const kept = boxes.filter((item, index) => {
+    if (widths[index] === 0) return false
+    item.box.style.setProperty("--panel-hold-width", `${widths[index]}px`)
+
+    return true
+  })
+
+  held = kept.map((item) => item.box)
+  shifted = kept.flatMap((item) => item.shifts())
   shiftHeld()
 }
 
 function shiftHeld() {
   const remaining = driver?.remaining() ?? 0
-  held.forEach((item) => {
-    if (item.shift !== 0) item.box.style.translate = `${item.shift * remaining}px`
-  })
+  shifted.forEach((item) => (item.element.style.translate = `${item.shift * remaining}px`))
+}
+
+// Reads where a hold's anchors start before its box takes its landing width; the returned function reads them again
+// after, and gives what moves to keep each where it was.
+function measureAnchors(box: HTMLElement, anchor: Hold["anchor"]): () => Shift[] {
+  if (anchor === "blocks") return measureBlocks(box)
+  const element = anchor?.()
+
+  if (!element) return () => []
+  const before = anchorX(element, "start")
+
+  return () => {
+    const shift = before - anchorX(element, "start")
+
+    return shift === 0 ? [] : [{ element: box, shift }]
+  }
+}
+
+// The box's blocks in view, breadth first up to a bound, so a column that moves against its parent, like centred
+// content, keeps its start edge. Inline boxes rewrap rather than move, and a block that also moves down has wrapped onto
+// another line; both are left to the layout, as is a block that already has its own translate.
+function measureBlocks(box: HTMLElement) {
+  const bounds = box.getBoundingClientRect()
+  const rtl = box.matches(":dir(rtl)")
+  const start = (rect: DOMRect) => (rtl ? rect.right : rect.left)
+  const blocks = [{ element: box, parent: -1, x: start(bounds), y: bounds.top }]
+
+  const visit = (element: Element, parent: number) =>
+    [...element.children].forEach((child) => {
+      if (!(child instanceof HTMLElement) || blocks.length >= 400) return
+      const display = getComputedStyle(child).display
+
+      // A `display: contents` wrapper has no box of its own; its children lay out in its parent's.
+      if (display === "contents") return visit(child, parent)
+
+      if (display.startsWith("inline")) return
+      const rect = child.getBoundingClientRect()
+
+      if (rect.width === 0 || rect.bottom <= bounds.top || rect.top >= bounds.bottom) return
+      blocks.push({ element: child, parent, x: start(rect), y: rect.top })
+    })
+
+  for (let index = 0; index < blocks.length && blocks.length < 400; index++) visit(blocks[index]!.element, index)
+
+  return () => {
+    const moved = blocks.map((block) => {
+      const rect = block.element.getBoundingClientRect()
+
+      return { x: block.x - start(rect), y: block.y - rect.top }
+    })
+
+    return blocks.flatMap((block, index) =>
+      block.parent >= 0 &&
+      Math.abs(moved[index].x) >= 0.5 &&
+      Math.abs(moved[index].y) < 0.5 &&
+      Math.abs(moved[block.parent].x) < 0.5 &&
+      !block.element.style.translate
+        ? [{ element: block.element, shift: moved[index].x }]
+        : [],
+    )
+  }
 }
 
 /** Adds a button that toggles a panel to the Motion workspace's Sidebars section while the panel is mounted. */
@@ -353,6 +414,7 @@ export function createPanelMotion(input: {
             motion.snap(0)
             paint()
           }
+
           fly(true)
 
           return fadePanel(open)
@@ -421,6 +483,7 @@ export function createPanelMotion(input: {
       const start = fades.length > 0 ? { transform: now.transform, opacity: now.opacity } : open ? away : rest
       const end = open ? rest : away
       fades.forEach((animation) => animation.cancel())
+
       const current = [
         element.animate(
           { transform: [start.transform, end.transform] },
@@ -435,6 +498,7 @@ export function createPanelMotion(input: {
           },
         ),
       ]
+
       fades = current
       fading = true
       void Promise.all(current.map((animation) => animation.finished)).then(
