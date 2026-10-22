@@ -45,6 +45,7 @@ import {
   Exit,
   Fiber,
   Layer,
+  Option,
   PubSub,
   Ref,
   Schedule,
@@ -1260,6 +1261,17 @@ test("skips MCP resource requests when the capability is absent", async () => {
   )
 })
 
+type CreatedForm = { readonly form: Form.Info; readonly directory: string | undefined }
+
+// Clients drop `form.created` events without a Location, so the form must be published inside the server's Location.
+const recordForm = (created: Deferred.Deferred<CreatedForm>, form: Form.Info) =>
+  Effect.serviceOption(Location.Service).pipe(
+    Effect.flatMap((location) =>
+      Deferred.succeed(created, { form, directory: Option.getOrUndefined(location)?.directory }),
+    ),
+    Effect.asVoid,
+  )
+
 test("accepts empty MCP elicitations without creating forms", async () => {
   await Effect.runPromise(
     Effect.scoped(
@@ -1284,13 +1296,14 @@ test("acknowledges completed MCP URL elicitations without returning internal con
     Effect.scoped(
       Effect.gen(function* () {
         const server = yield* resourceServer({ resources: false, urlElicitation: true })
-        const created = yield* Deferred.make<Form.Info>()
+        const created = yield* Deferred.make<CreatedForm>()
         const result = yield* Effect.gen(function* () {
           const service = yield* Mcp.Service
           const forms = yield* Form.Service
           const call = yield* service.callTool({ server: "resources", name: "url-elicitation" }).pipe(Effect.forkScoped)
 
-          const form = yield* Deferred.await(created)
+          const { form, directory } = yield* Deferred.await(created)
+          expect(directory).toBe(import.meta.dir)
           expect(form.fields).toEqual([{ key: "elicitation", type: "external", url: "https://example.com/authorize" }])
 
           yield* Effect.promise(server.completeElicitation)
@@ -1298,7 +1311,7 @@ test("acknowledges completed MCP URL elicitations without returning internal con
           expect(yield* forms.state(form.id)).toEqual({ status: "answered", answer: { elicitation: true } })
           return result
         }).pipe(
-          Effect.provide(resourceMcpLayer(server.url, (form) => Deferred.succeed(created, form).pipe(Effect.asVoid))),
+          Effect.provide(resourceMcpLayer(server.url, (form) => recordForm(created, form))),
         )
 
         expect(result.structured).toEqual({ action: "accept" })
@@ -1312,13 +1325,14 @@ test("settles modern MCP URL elicitations when the user confirms", async () => {
     Effect.scoped(
       Effect.gen(function* () {
         const server = yield* resourceServer({ modern: true, resources: false, urlElicitation: true })
-        const created = yield* Deferred.make<Form.Info>()
+        const created = yield* Deferred.make<CreatedForm>()
         const result = yield* Effect.gen(function* () {
           const service = yield* Mcp.Service
           const forms = yield* Form.Service
           const call = yield* service.callTool({ server: "resources", name: "url-elicitation" }).pipe(Effect.forkScoped)
 
-          const form = yield* Deferred.await(created)
+          const { form, directory } = yield* Deferred.await(created)
+          expect(directory).toBe(import.meta.dir)
           expect(form.metadata).not.toHaveProperty("elicitationID")
           yield* forms.reply({ id: form.id, answer: { elicitation: true } })
           return yield* Fiber.join(call)
@@ -1326,7 +1340,7 @@ test("settles modern MCP URL elicitations when the user confirms", async () => {
           Effect.provide(
             resourceMcpLayer(
               new ConfigMCP.Remote({ type: "remote", url: server.url, oauth: false, protocol: "2026-07-28" }),
-              (form) => Deferred.succeed(created, form).pipe(Effect.asVoid),
+              (form) => recordForm(created, form),
             ),
           ),
         )
