@@ -98,6 +98,8 @@ function resourceServer(
     listChanged?: boolean
     emptyElicitation?: boolean
     urlElicitation?: boolean
+    /** Legacy servers give up on the URL elicitation after this many milliseconds. */
+    elicitationTimeout?: number
     respond?: (request: Request) => Response | undefined | Promise<Response | undefined>
   } = {},
 ) {
@@ -175,12 +177,15 @@ function resourceServer(
             const response = inputResponse(responses, "auth")
             const result = input.modern
               ? { action: response.kind === "elicit" ? response.action : "cancel" }
-              : await protocol.elicitInput({
-                  mode: "url",
-                  message: "Authorize access",
-                  url,
-                  elicitationId: "elicitation-test",
-                })
+              : await protocol.elicitInput(
+                  {
+                    mode: "url",
+                    message: "Authorize access",
+                    url,
+                    elicitationId: "elicitation-test",
+                  },
+                  input.elicitationTimeout === undefined ? undefined : { timeout: input.elicitationTimeout },
+                )
             return {
               content: [{ type: "text", text: JSON.stringify(result) }],
               structuredContent: result,
@@ -1315,6 +1320,30 @@ test("acknowledges completed MCP URL elicitations without returning internal con
         )
 
         expect(result.structured).toEqual({ action: "accept" })
+      }),
+    ),
+  )
+})
+
+test("cancels MCP elicitation forms when the server gives up on them", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const server = yield* resourceServer({ resources: false, urlElicitation: true, elicitationTimeout: 200 })
+        const created = yield* Deferred.make<CreatedForm>()
+        yield* Effect.gen(function* () {
+          const service = yield* Mcp.Service
+          const forms = yield* Form.Service
+          const call = yield* service.callTool({ server: "resources", name: "url-elicitation" }).pipe(Effect.forkScoped)
+          const { form } = yield* Deferred.await(created)
+          yield* Fiber.await(call)
+          // The server's cancellation and its tool error race; the form settles shortly after either.
+          const state = yield* forms.state(form.id).pipe(
+            Effect.repeat({ until: (state) => state.status !== "pending", schedule: Schedule.spaced("10 millis") }),
+            Effect.timeout("2 seconds"),
+          )
+          expect(state.status).toBe("cancelled")
+        }).pipe(Effect.provide(resourceMcpLayer(server.url, (form) => recordForm(created, form))))
       }),
     ),
   )
