@@ -110,6 +110,7 @@ import { cliErrorMessage, errorFormat } from "./util/error"
 import { AttentionProvider } from "./context/attention"
 import { StorageProvider, useStorage } from "./context/storage"
 import { SessionTerminalsProvider } from "./context/session-terminals"
+import { ClientMcp } from "./context/client-mcp"
 import { PanelProvider, usePanel } from "./context/panel"
 import { SessionFrame } from "./component/session-frame"
 import { createTuiClipboard } from "./clipboard"
@@ -215,9 +216,10 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   const config = Config.resolve(yield* Effect.tryPromise(() => input.config.get()), {
     terminalSuspend: process.platform !== "win32",
   })
+  const headers = Service.headers(input.server.endpoint)
   const options = {
     baseUrl: input.server.endpoint.url,
-    headers: Service.headers(input.server.endpoint),
+    headers,
     fetch: noTimeoutFetch,
   }
   const api = OpenCode.make(options)
@@ -234,7 +236,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         reconnect: async (signal: AbortSignal) => {
           const endpoint = await managed.reconnect(signal)
           const next = { baseUrl: endpoint.url, headers: Service.headers(endpoint), fetch: noTimeoutFetch }
-          return { api: OpenCode.make(next), url: endpoint.url }
+          return { api: OpenCode.make(next), url: endpoint.url, headers: next.headers }
         },
         restart: managed.restart,
       }
@@ -404,7 +406,12 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                 : undefined
                                             }
                                           >
-                                            <ClientProvider api={api} url={input.server.endpoint.url} service={service}>
+                                            <ClientProvider
+                                              api={api}
+                                              url={input.server.endpoint.url}
+                                              headers={headers}
+                                              service={service}
+                                            >
                                               <PermissionProvider>
                                                 <DataProvider directory={directory}>
                                                   <LocationProvider>
@@ -415,6 +422,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                           source={createThemeSource(global.config)}
                                                         >
                                                           <ThemeErrorToast />
+                                                          <ClientMcp />
                                                           <LocalProvider>
                                                             <PromptStashProvider>
                                                               <DialogProvider>
