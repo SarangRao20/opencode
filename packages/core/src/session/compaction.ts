@@ -562,7 +562,8 @@ export const layer = Layer.effect(
       }
       if (total > room) return undefined
 
-      const omitted = levels.filter((level) => level === OMITTED).length
+      // Includes exchanges with no user text, which are already gone at `USER_ONLY`.
+      const omitted = levels.filter((level, index) => !exchanges[index][level]).length
       const text = exchanges
         .map((renders, index) => renders[levels[index]])
         .filter(Boolean)
