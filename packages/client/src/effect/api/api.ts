@@ -29,14 +29,13 @@ import type { Form } from "@opencode/schema/form"
 import type { Provider } from "@opencode/schema/provider"
 import type { Integration } from "@opencode/schema/integration"
 import type { Mcp } from "@opencode/schema/mcp"
-import type { ConnectTicket } from "@opencode/schema/connect-ticket"
+import type { PtyTicket } from "@opencode/schema/pty-ticket"
 import type { Credential } from "@opencode/schema/credential"
 import type { PermissionSaved } from "@opencode/schema/permission-saved"
 import type { FileSystem } from "@opencode/schema/filesystem"
 import type { Command } from "@opencode/schema/command"
 import type { OpenCodeEvent } from "@opencode/protocol/groups/event"
 import type { Pty } from "@opencode/schema/pty"
-import type { PtyTicket } from "@opencode/schema/pty-ticket"
 import type { Reference } from "@opencode/schema/reference"
 import type { Worktree } from "@opencode/schema/worktree"
 import type { Vcs } from "@opencode/schema/vcs"
@@ -1648,7 +1647,7 @@ export type McpClientTokenInput = {
   readonly name: string
   readonly "x-opencode-ticket"?: string | undefined
 }
-export type McpClientTokenOutput = { readonly location: Location.PublicRef; readonly data: ConnectTicket.Token }
+export type McpClientTokenOutput = { readonly location: Location.PublicRef; readonly data: PtyTicket.ConnectToken }
 export type McpClientTokenOperation<E = never> = (input: McpClientTokenInput) => Effect.Effect<McpClientTokenOutput, E>
 
 export interface McpApi<E = never> {

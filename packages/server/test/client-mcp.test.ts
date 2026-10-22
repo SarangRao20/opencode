@@ -9,10 +9,9 @@ import { Tool } from "@opencode/core/tool"
 import { McpTool } from "@opencode/core/tool/mcp"
 import { Context, Effect, Exit, Layer, Schedule, Scope } from "effect"
 import { HttpRouter, HttpServer } from "effect/http"
-import fs from "node:fs/promises"
 import { createServer } from "node:http"
-import os from "node:os"
 import path from "node:path"
+import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { ServerProcess } from "../src/process"
 import { createRoutes } from "../src/routes"
@@ -25,10 +24,7 @@ declare const WebSocket: {
 const authorization = `Basic ${btoa("opencode:secret")}`
 
 const serve = Effect.fnUntraced(function* () {
-  const directory = yield* Effect.acquireRelease(
-    Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "opencode-client-mcp-")).then((dir) => fs.realpath(dir))),
-    (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
-  )
+  const directory = (yield* tmpdirScoped("opencode-client-mcp-")).path
   const context = yield* Layer.build(
     createRoutes({
       password: "secret",
@@ -171,18 +167,21 @@ it.live(
   () =>
     Effect.gen(function* () {
       const server = yield* serve()
+      const requestToken = (name: string, headers: Record<string, string>) => {
+        const url = new URL("/api/experimental/client-mcp/token", server.base)
+        url.searchParams.set("location[directory]", server.directory)
+        url.searchParams.set("name", name)
+        return fetch(url, { method: "POST", headers })
+      }
       const token = (name: string) =>
         Effect.promise(async () => {
-          const url = new URL("/api/experimental/client-mcp/token", server.base)
-          url.searchParams.set("location[directory]", server.directory)
-          url.searchParams.set("name", name)
-          const response = await fetch(url, {
-            method: "POST",
-            headers: { authorization, "x-opencode-ticket": "1" },
-          })
+          const response = await requestToken(name, { authorization, "x-opencode-ticket": "1" })
           expect(response.status).toBe(200)
           return ((await response.json()) as { data: { ticket: string } }).data.ticket
         })
+
+      // Without the preflight-forcing header, a ticket cannot be minted even with credentials.
+      expect((yield* Effect.promise(() => requestToken("web", { authorization }))).status).toBe(403)
 
       const unauthenticated = yield* connectClient(server.url({ name: "web" }))
       yield* until(() => unauthenticated.state.closed)
@@ -192,6 +191,11 @@ it.live(
       const mismatched = yield* connectClient(server.url({ name: "other", ticket }))
       yield* until(() => mismatched.state.closed)
       expect(mismatched.state.open).toBeFalse()
+
+      const otherDirectory = server.url({ name: "web", ticket: yield* token("web") })
+      otherDirectory.protocol = "http:"
+      otherDirectory.searchParams.set("location[directory]", path.join(server.directory, "other"))
+      expect((yield* Effect.promise(() => fetch(otherDirectory))).status).toBe(403)
 
       const fresh = yield* token("web")
       const client = yield* connectClient(server.url({ name: "web", ticket: fresh }))
@@ -264,11 +268,9 @@ it.live(
   "shuts the server down while a client is attached",
   () =>
     Effect.gen(function* () {
-      const directory = yield* Effect.acquireRelease(
-        Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "opencode-client-mcp-"))),
-        (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
-      )
-      const scope = yield* Scope.make()
+      const directory = (yield* tmpdirScoped("opencode-client-mcp-")).path
+      // Released before the directory so the server lets go of it first; closing twice is a no-op.
+      const scope = yield* Effect.acquireRelease(Scope.make(), (scope) => Scope.close(scope, Exit.void))
       const server = yield* ServerProcess.start<never, never>(
         {
           hostname: "127.0.0.1",

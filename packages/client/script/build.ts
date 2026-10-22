@@ -27,7 +27,6 @@ import { PromptInput } from "@opencode/schema/prompt-input"
 import { Provider } from "@opencode/schema/provider"
 import { Pty } from "@opencode/schema/pty"
 import { PtyTicket } from "@opencode/schema/pty-ticket"
-import { ConnectTicket } from "@opencode/schema/connect-ticket"
 import { Question } from "@opencode/schema/question"
 import { Reference } from "@opencode/schema/reference"
 import { AbsolutePath, RelativePath } from "@opencode/schema/schema"
@@ -72,7 +71,6 @@ const effectTypeReferences = [
   ...namespaceTypes("Provider", "@opencode/schema/provider", Provider),
   ...namespaceTypes("Pty", "@opencode/schema/pty", Pty),
   ...namespaceTypes("PtyTicket", "@opencode/schema/pty-ticket", PtyTicket),
-  ...namespaceTypes("ConnectTicket", "@opencode/schema/connect-ticket", ConnectTicket),
   ...namespaceTypes("Question", "@opencode/schema/question", Question),
   ...namespaceTypes("Reference", "@opencode/schema/reference", Reference),
   ...namespaceTypes("Session", "@opencode/schema/session", Session),
