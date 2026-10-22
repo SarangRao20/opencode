@@ -714,14 +714,17 @@ it.effect("compaction lowers the output limit when it sends a request it could n
   Effect.gen(function* () {
     requests = []
     const session = yield* insertSession(Session.ID.make("ses_unshrinkable_compaction"))
-    // One exchange estimated at 250k tokens, past the 200k window, so no older exchange can be dropped.
+    // A previous summary estimated at 250k tokens, past the 200k window; it always stays whole.
     const messages = [
-      SessionMessage.User.make({
+      SessionMessage.CompactionCompleted.make({
         id: SessionMessage.ID.create(),
-        type: "user",
-        text: "x".repeat(1_000_000),
+        type: "compaction",
+        status: "completed",
+        reason: "manual",
+        summary: "x".repeat(1_000_000),
         time: { created: DateTime.makeUnsafe(0) },
       }),
+      textUser("Next question"),
     ]
 
     expect(yield* compactManually(session, messages)).toEqual({ status: "completed" })

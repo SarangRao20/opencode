@@ -68,14 +68,14 @@ export const messageToText = (message: SessionMessage.Info): string => {
   }
 }
 
-export const truncateToolOutput = (value: string, max = TOOL_OUTPUT_MAX_CHARS) => {
-  if (value.length <= max) return value
+export const truncateToolOutput = (value: string) => {
+  if (value.length <= TOOL_OUTPUT_MAX_CHARS) return value
 
   // Count code points so a surrogate pair is never split.
   let end = 0
   let kept = 0
   for (const char of value) {
-    if (kept === max) break
+    if (kept === TOOL_OUTPUT_MAX_CHARS) break
     end += char.length
     kept++
   }
