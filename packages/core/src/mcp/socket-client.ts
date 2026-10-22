@@ -1,7 +1,7 @@
 export * as McpSocketClient from "./socket-client.js"
 
 import { deserializeMessage, type JSONRPCMessage, type Transport } from "@modelcontextprotocol/client"
-import { Effect, Result } from "effect"
+import { Result } from "effect"
 
 /** The side of an incoming WebSocket the transport writes to. */
 export interface Socket {
@@ -42,12 +42,10 @@ export function make(socket: Socket): SocketTransport {
   }
 
   const receive = (text: string) => {
-    const parsed = Effect.runSync(
-      Effect.try({
-        try: () => deserializeMessage(text),
-        catch: (cause) => new Error("Invalid MCP socket frame", { cause }),
-      }).pipe(Effect.result),
-    )
+    const parsed = Result.try({
+      try: () => deserializeMessage(text),
+      catch: (cause) => new Error("Invalid MCP socket frame", { cause }),
+    })
     if (Result.isFailure(parsed)) return transport.onerror?.(parsed.failure)
     transport.onmessage?.(parsed.success)
   }
@@ -63,18 +61,21 @@ export function make(socket: Socket): SocketTransport {
     send: (message: JSONRPCMessage) =>
       phase !== "open"
         ? Promise.reject(new Error("Not connected"))
-        : Promise.try(() => socket.send(JSON.stringify(message))),
+        : Promise.try(() => {
+            socket.send(JSON.stringify(message))
+          }),
     close: () => {
       if (phase === "closed") return Promise.resolve()
       phase = "closed"
       pending.length = 0
-      socket.close(1000)
+      const closed = Result.try(() => socket.close(1000))
       transport.onclose?.()
-      return Promise.resolve()
+      return Result.isFailure(closed) ? Promise.reject(closed.failure) : Promise.resolve()
     },
     deliver: (text) => {
       if (phase === "closed") return
-      if (phase === "ready") {
+      // Keep FIFO order when a frame arrives re-entrantly while start() is still flushing.
+      if (phase === "ready" || pending.length > 0) {
         pending.push(text)
         return
       }

@@ -110,6 +110,52 @@ describe("McpSocketClient", () => {
     expect(seen.messages).toEqual([])
   })
 
+  test("close() before start drops buffered frames and rejects start", async () => {
+    const socket = fakeSocket()
+    const transport = McpSocketClient.make(socket)
+    const seen = observe(transport)
+    transport.deliver(JSON.stringify(ping))
+    await transport.close()
+    expect(socket.closed).toEqual([1000])
+    expect(seen.closes).toBe(1)
+    await expect(transport.start()).rejects.toThrow("Not connected")
+    expect(seen.messages).toEqual([])
+  })
+
+  test("close() fires onclose and rejects when the socket close throws", async () => {
+    const transport = McpSocketClient.make({
+      send: () => {},
+      close: () => {
+        throw new Error("boom")
+      },
+    })
+    const seen = observe(transport)
+    await transport.start()
+    await expect(transport.close()).rejects.toThrow("boom")
+    expect(seen.closes).toBe(1)
+  })
+
+  test("keeps FIFO order for frames delivered while flushing the buffer", async () => {
+    const transport = McpSocketClient.make(fakeSocket())
+    const seen = observe(transport)
+    const third: JSONRPCMessage = { jsonrpc: "2.0", id: 3, method: "ping" }
+    transport.onmessage = (message) => {
+      seen.messages.push(message)
+      if (seen.messages.length === 1) transport.deliver(JSON.stringify(third))
+    }
+    transport.deliver(JSON.stringify(ping))
+    transport.deliver(JSON.stringify({ ...ping, id: 2 }))
+    await transport.start()
+    expect(seen.messages).toEqual([ping, { ...ping, id: 2 }, third])
+  })
+
+  test("send resolves to undefined", async () => {
+    const transport = McpSocketClient.make({ send: () => true, close: () => {} })
+    observe(transport)
+    await transport.start()
+    expect(await transport.send(ping)).toBeUndefined()
+  })
+
   test("rejects a second start", async () => {
     const transport = McpSocketClient.make(fakeSocket())
     observe(transport)
